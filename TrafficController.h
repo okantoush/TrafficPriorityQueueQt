@@ -14,6 +14,13 @@ private:
 
     int  currentPhase;
     int  ticksRemaining;
+    bool inYellow;
+    int  yellowTicks;
+    bool inAllRed;         // all-red clearance gap between phases
+    int  allRedTicks;
+    int  pendingPhase;     // which phase to activate after all-red
+    static const int YELLOW_DURATION  = 40; // ~2 seconds at 50ms/tick
+    static const int ALL_RED_DURATION = 30; // ~1.5 seconds clearance
 
     bool phaseHasCars(int phase) const {
         if (phase == 0) return !lanes[0].isEmpty() || !lanes[2].isEmpty();
@@ -48,7 +55,9 @@ private:
 
 public:
     TrafficController()
-        : currentPhase(0), ticksRemaining(0)
+        : currentPhase(0), ticksRemaining(0),
+          inYellow(false), yellowTicks(0),
+          inAllRed(false), allRedTicks(0), pendingPhase(0)
     {
         for (int i = 0; i < 4; i++) lights[i].state = RED;
     }
@@ -57,7 +66,9 @@ public:
         if (car->isEmergency) {
             // All lights → RED the moment an emergency vehicle is registered
             for (int i = 0; i < 4; i++) lights[i].state = RED;
-            ticksRemaining = 0; // pause normal rotation
+            ticksRemaining = 0;
+            inYellow = false;
+            inAllRed = false;
             emergencyQueue.enqueue(car);
             qDebug() << "🚨 Emergency queued:" << car->vehicleID
                      << "— all lights RED. Queue size:"
@@ -79,22 +90,66 @@ public:
         return emergencyQueue.peek();
     }
 
-    // Call once per tick. If emergency queue is non-empty, keeps all
-    // lights red and does nothing else. Normal rotation resumes only
-    // when the queue is empty.
+    // Call once per tick. Handles green → yellow → ALL RED → next green cycle.
+    // If emergency queue is non-empty, keeps all lights red.
     void advanceLights() {
         // Emergency cars present → freeze all lights red, don't rotate
         if (!emergencyQueue.isEmpty()) {
             for (int i = 0; i < 4; i++) lights[i].state = RED;
+            inYellow = false;
+            inAllRed = false;
             return;
         }
 
         if (!anyLaneHasCars()) return;
 
+        // All-red clearance phase — let intersection clear before next green
+        if (inAllRed) {
+            allRedTicks--;
+            if (allRedTicks <= 0) {
+                inAllRed = false;
+                activatePhase(pendingPhase);
+                qDebug() << "🔴 All-red clearance done → activating phase" << pendingPhase;
+            }
+            return;
+        }
+
+        // Yellow phase — count down, then enter all-red
+        if (inYellow) {
+            yellowTicks--;
+            if (yellowTicks <= 0) {
+                inYellow = false;
+                for (int i = 0; i < 4; i++) lights[i].state = RED;
+
+                // Enter all-red clearance before next green
+                int next = 1 - currentPhase;
+                if (!phaseHasCars(next)) next = currentPhase;
+                pendingPhase = next;
+                inAllRed = true;
+                allRedTicks = ALL_RED_DURATION;
+                qDebug() << "🔴 All-red clearance started";
+            }
+            return;
+        }
+
+        // Normal green countdown
         if (ticksRemaining <= 0) {
             int next = 1 - currentPhase;
-            if (!phaseHasCars(next)) next = currentPhase;
-            activatePhase(next);
+            bool needSwitch = phaseHasCars(next) && (next != currentPhase);
+            if (needSwitch) {
+                // Go yellow on current green lanes
+                if (currentPhase == 0) {
+                    lights[0].state = YELLOW; lights[2].state = YELLOW;
+                } else {
+                    lights[1].state = YELLOW; lights[3].state = YELLOW;
+                }
+                inYellow = true;
+                yellowTicks = YELLOW_DURATION;
+                qDebug() << "🟡 Phase" << currentPhase << "→ YELLOW";
+                return;
+            }
+            // No cars in the other phase — just re-activate current
+            activatePhase(currentPhase);
         }
         ticksRemaining--;
     }
@@ -125,7 +180,9 @@ public:
         return car;
     }
 
-    // Release one normal car from a lane if its light is green
+    bool isYellow() const { return inYellow; }
+
+    // Release one normal car from a lane if its light is green (not yellow/red)
     Node* tryRelease(int laneIndex) {
         if (lights[laneIndex].state != GREEN) return nullptr;
         if (lanes[laneIndex].isEmpty())       return nullptr;

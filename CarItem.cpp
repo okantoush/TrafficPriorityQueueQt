@@ -10,10 +10,14 @@ CarItem::CarItem(Node* node, int dir, int lane)
     direction     = dir;
     laneIndex     = lane;
     stopCoord     = 0;
+    effectiveStop = 0;
     clearCoord    = 0;
-    atStopLine    = false;
-    released      = false;
+    atStopLine     = false;
+    released       = false;
     inIntersection = false;
+    lateralTarget  = 0;
+    originalLateral = 0;
+    yielding       = false;
 
     if (dir == 0 || dir == 2)
         setRect(0, 0, CAR_W, CAR_H); // N/S: narrow and tall
@@ -31,14 +35,13 @@ bool CarItem::moveForward() {
     case 0: { // North — travels UP — y decreases — leading edge = top = y()
         qreal nextY = y() - speed;
 
-        // Check if car has entered the intersection (passed clearCoord going up)
         if (!inIntersection && y() <= clearCoord)
             inIntersection = true;
 
-        // If not yet released and not already committed, stop at stop line
-        if (!released && !inIntersection) {
-            if (nextY <= stopCoord) {
-                setPos(x(), stopCoord);
+        // Emergency cars never stop at the stop line — they bypass traffic
+        if (!released && !inIntersection && !data->isEmergency) {
+            if (nextY <= effectiveStop) {
+                setPos(x(), effectiveStop);
                 atStopLine = true;
                 return false;
             }
@@ -55,9 +58,9 @@ bool CarItem::moveForward() {
         if (!inIntersection && leadingX >= clearCoord)
             inIntersection = true;
 
-        if (!released && !inIntersection) {
-            if ((nextX + CAR_H) >= stopCoord) {
-                setPos(stopCoord - CAR_H, y());
+        if (!released && !inIntersection && !data->isEmergency) {
+            if ((nextX + CAR_H) >= effectiveStop) {
+                setPos(effectiveStop - CAR_H, y());
                 atStopLine = true;
                 return false;
             }
@@ -74,9 +77,9 @@ bool CarItem::moveForward() {
         if (!inIntersection && leadingY >= clearCoord)
             inIntersection = true;
 
-        if (!released && !inIntersection) {
-            if ((nextY + CAR_H) >= stopCoord) {
-                setPos(x(), stopCoord - CAR_H);
+        if (!released && !inIntersection && !data->isEmergency) {
+            if ((nextY + CAR_H) >= effectiveStop) {
+                setPos(x(), effectiveStop - CAR_H);
                 atStopLine = true;
                 return false;
             }
@@ -92,9 +95,9 @@ bool CarItem::moveForward() {
         if (!inIntersection && x() <= clearCoord)
             inIntersection = true;
 
-        if (!released && !inIntersection) {
-            if (nextX <= stopCoord) {
-                setPos(stopCoord, y());
+        if (!released && !inIntersection && !data->isEmergency) {
+            if (nextX <= effectiveStop) {
+                setPos(effectiveStop, y());
                 atStopLine = true;
                 return false;
             }
@@ -106,4 +109,22 @@ bool CarItem::moveForward() {
 
     }
     return false;
+}
+
+void CarItem::animateLateral() {
+    const qreal lateralSpeed = 2.0;
+
+    // For N/S cars, lateral = x. For E/W cars, lateral = y.
+    bool vertical = (direction == 0 || direction == 2);
+    qreal current = vertical ? x() : y();
+    qreal diff = lateralTarget - current;
+
+    if (qAbs(diff) < 0.5) return; // close enough
+
+    qreal step = (diff > 0) ? qMin(lateralSpeed, diff) : qMax(-lateralSpeed, diff);
+
+    if (vertical)
+        setPos(x() + step, y());
+    else
+        setPos(x(), y() + step);
 }

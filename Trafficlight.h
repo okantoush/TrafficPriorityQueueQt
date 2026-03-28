@@ -3,7 +3,8 @@
 
 enum LightState {
     RED,
-    GREEN
+    GREEN,
+    YELLOW
 };
 
 class TrafficLight {
