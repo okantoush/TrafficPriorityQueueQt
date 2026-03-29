@@ -7,6 +7,7 @@ SOURCES += main.cpp \
            PriorityQueue.cpp
 
 HEADERS += CarItem.h \
+           HashMap.h \
            IntersectionWindow.h \
            Node.h \
            PriorityQueue.h \

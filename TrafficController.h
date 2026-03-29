@@ -4,6 +4,7 @@
 #include "Lane.h"
 #include "PriorityQueue.h"
 #include "TrafficLight.h"
+#include "HashMap.h"
 #include <QDebug>
 
 class TrafficController {
@@ -11,6 +12,9 @@ private:
     Lane         lanes[4];
     TrafficLight lights[4];
     PriorityQueue emergencyQueue; // FIFO priority queue — first-in first-out for equal priority
+
+    HashMap carsCleared;
+    HashMap historicalCongestion;
 
     int  currentPhase;
     int  ticksRemaining;
@@ -34,13 +38,25 @@ private:
     }
 
     int calculateGreenTicks() {
-        int maxSize = (currentPhase == 0)
-        ? qMax(lanes[0].getSize(), lanes[2].getSize())
-        : qMax(lanes[1].getSize(), lanes[3].getSize());
-        if (maxSize == 0) return 20;
-        if (maxSize < 3)  return 60;
-        if (maxSize < 6)  return 100;
-        return 140;
+        int baseTicks = 20;
+
+        // Current immediate need
+        int currentQueue = (currentPhase == 0)
+                               ? qMax(lanes[0].getSize(), lanes[2].getSize())
+                               : qMax(lanes[1].getSize(), lanes[3].getSize());
+
+        // Historical need from Hash Map
+        int historicalMax = (currentPhase == 0)
+                                ? qMax(historicalCongestion.get(0), historicalCongestion.get(2))
+                                : qMax(historicalCongestion.get(1), historicalCongestion.get(3));
+
+        if (currentQueue == 0) return baseTicks;
+
+        // Dynamic formula: Base time + (current queue * 10) + (historical backup * 2)
+        int calculatedTicks = baseTicks + (currentQueue * 10) + (historicalMax * 2);
+
+        // Cap at 200 so cross-traffic isn't permanently blocked
+        return qMin(calculatedTicks, 200);
     }
 
     void activatePhase(int phase) {
@@ -76,6 +92,19 @@ public:
         } else {
             lanes[laneIndex].enqueue(car);
         }
+    }
+
+    void updateCongestionStats() {
+        for (int i = 0; i < 4; i++) {
+            int currentSize = lanes[i].getSize();
+            if (currentSize > historicalCongestion.get(i)) {
+                historicalCongestion.put(i, currentSize);
+            }
+        }
+    }
+
+    void recordCarCleared(int direction) {
+        carsCleared.increment(direction);
     }
 
     LightState getLightState(int laneIndex) const {
