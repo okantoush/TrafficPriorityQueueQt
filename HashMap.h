@@ -39,6 +39,7 @@ public:
     }
 
     // Insert or update a value
+
     void put(int key, int value) {
         int hashVal = hashFunction(key);
         HashNode* entry = table[hashVal];
@@ -57,7 +58,7 @@ public:
         table[hashVal] = newNode;
     }
 
-    // Retrieve a value (returns 0 if not found)
+    // Retrieve a value
     int get(int key) const {
         int hashVal = hashFunction(key);
         HashNode* entry = table[hashVal];
@@ -68,10 +69,10 @@ public:
             }
             entry = entry->next;
         }
-        return 0; // Default if key doesn't exist
+        return 0;
     }
 
-    // Helper to increment statistics easily
+    // to increment statistics
     void increment(int key) {
         put(key, get(key) + 1);
     }
