@@ -2,7 +2,7 @@
 #define PRIORITYQUEUE_H
 
 #include "Node.h"
-
+// Queue for emergency vehicles
 class PriorityQueue {
 private:
     Node* front;

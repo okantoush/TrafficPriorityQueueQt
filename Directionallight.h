@@ -5,30 +5,10 @@
 #include <QPainter>
 #include <QRectF>
 
-// Traffic light housing sitting at intersection corners (off the road).
-// The lens is on the face pointing TOWARD the incoming cars.
-//
-//  dir=0  North lane (cars travel UP from bottom)
-//         → light at top-right corner, lens on BOTTOM face (faces down toward cars)
-//
-//  dir=1  East lane (cars travel RIGHT from left)
-//         → light at top-left corner, lens on RIGHT face (faces right toward cars)
-//         Wait — East cars come FROM the left, so the light must face LEFT (toward x=0)
-//         → lens on LEFT face
-//
-//  dir=2  South lane (cars travel DOWN from top)
-//         → light at bottom-left corner, lens on TOP face (faces up toward cars)
-//
-//  dir=3  West lane (cars travel LEFT from right)
-//         → light at bottom-right corner, lens on LEFT face ... no:
-//         West cars come FROM the right, so the light faces RIGHT (toward x=600)
-//         → lens on RIGHT face
-//
-// Summary of open/lens face per direction:
-//   dir=0  North → lens faces DOWN   (south face of housing)
-//   dir=1  East  → lens faces LEFT   (west  face of housing)
-//   dir=2  South → lens faces UP     (north face of housing)
-//   dir=3  West  → lens faces RIGHT  (east  face of housing)
+//   dir=0  North → lens faces DOWN
+//   dir=1  East  → lens faces LEFT
+//   dir=2  South → lens faces UP
+//   dir=3  West  → lens faces RIGHT
 
 class DirectionalLight : public QGraphicsItem
 {

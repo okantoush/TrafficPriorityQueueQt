@@ -11,7 +11,9 @@ struct HashNode {
 
 class HashMap {
 private:
-    static const int TABLE_SIZE = 8; // Small size is fine for 4 directions
+    //there is 4 lanes so created a table size of 8
+    static const int TABLE_SIZE = 8;
+
     HashNode* table[TABLE_SIZE];
 
     // Basic hash function
@@ -20,12 +22,12 @@ private:
     }
 
 public:
+
     HashMap() {
         for (int i = 0; i < TABLE_SIZE; i++) {
             table[i] = nullptr;
         }
     }
-
     ~HashMap() {
         for (int i = 0; i < TABLE_SIZE; i++) {
             HashNode* entry = table[i];

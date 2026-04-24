@@ -2,7 +2,7 @@
 #define LANE_H
 
 #include "Node.h"
-
+// To create lanes for intersection (N S E W)
 class Lane {
 private:
     Node* front;

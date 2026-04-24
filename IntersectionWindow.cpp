@@ -8,23 +8,48 @@
 #include <algorithm>
 
 // Stop/clear coords must be on the APPROACH side so cars hit stop before clear.
-// Intersection box is (250,250)–(350,350).
-//   North (UP,  y−−): approach from y=580, entry edge y=350  → stop just outside, clear just inside
-//   South (DOWN,y++): approach from y=10,  entry edge y=250  → stop just outside, clear just inside
-//   East  (RIGHT,x++): approach from x=10, entry edge x=250  → stop just outside, clear just inside
-//   West  (LEFT, x−−): approach from x=580,entry edge x=350  → stop just outside, clear just inside
-static const qreal STOP_N  = 360, STOP_S  = 240, STOP_E  = 220, STOP_W  = 380;
-static const qreal CLEAR_N = 350, CLEAR_S = 250, CLEAR_E = 250, CLEAR_W = 350;
+// Intersection box is (225,225)–(375,375). Each road is 150 px wide (75 per
+// direction), giving three 25-px lanes per direction — enough room for a
+// 16-px-wide car plus padding in each lane with no overlap.
+//   North (UP,  y−−): approach from y=580, entry edge y=375  → stop just outside, clear just inside
+//   South (DOWN,y++): approach from y=10,  entry edge y=225  → stop just outside, clear just inside
+//   East  (RIGHT,x++): approach from x=10, entry edge x=225  → stop just outside, clear just inside
+//   West  (LEFT, x−−): approach from x=580,entry edge x=375  → stop just outside, clear just inside
+static const qreal STOP_N  = 385, STOP_S  = 215, STOP_E  = 215, STOP_W  = 385;
+static const qreal CLEAR_N = 375, CLEAR_S = 225, CLEAR_E = 225, CLEAR_W = 375;
 
-static const qreal LANE_N[2] = { 320, 335 };
-static const qreal LANE_S[2] = { 260, 275 };
-static const qreal LANE_E[2] = { 260, 275 };
-static const qreal LANE_W[2] = { 320, 335 };
+// Right-hand traffic: drivers stay on the right side of the road.
+// Each direction has 3 zones in its 75-px road half: turn lane (20 px, next
+// to median) + two straight lanes (27.5 px each). Cars drive CENTERED in
+// their straight lane under normal conditions. When an emergency vehicle
+// arrives, startLaneSplit() shifts them to YIELD_* edge positions to open
+// up a corridor; endLaneSplit() restores them.
+// Positions below are top-left x (N/S) or y (E/W) for a 16-px-wide car,
+// placed at the middle of each lane zone.
+//   North (going UP):    east half  (x 300–375)
+//       turn zone 300–320, inner lane 320–347 center=326, outer 347–375 center=353
+//   South (going DOWN):  west half  (x 225–300)
+//       outer 225–252 center=231, inner 252–280 center=258, turn zone 280–300
+//   East  (going RIGHT): south half (y 300–375)  — same pattern as N
+//   West  (going LEFT):  north half (y 225–300)  — same pattern as S
+// Convention: LANE_[NE][0] = inner (near median); LANE_[SW][1] = inner.
+static const qreal LANE_N[2] = { 326, 353 };
+static const qreal LANE_S[2] = { 231, 258 };
+static const qreal LANE_E[2] = { 326, 353 };
+static const qreal LANE_W[2] = { 231, 258 };
+
+// Dedicated left-turn lanes — innermost lane, right up against the median.
+// Left-turners merge from their normal lane into these before the intersection.
+static const qreal TURN_N = 303;   // N left-turn lane x
+static const qreal TURN_S = 281;   // S left-turn lane x
+static const qreal TURN_E = 303;   // E left-turn lane y
+static const qreal TURN_W = 281;   // W left-turn lane y
 
 // ── Constructor ───────────────────────────────────────────────────────────
 IntersectionWindow::IntersectionWindow(bool manualMode)
     : m_manualMode(manualMode),
     m_nextIsEmergency(false),
+    m_nextIsTurnLeft(false),
     m_carCounter(0),
     m_emergencyWaiting(false),
     m_splittingDir(-1),
@@ -50,34 +75,77 @@ IntersectionWindow::IntersectionWindow(bool manualMode)
 void IntersectionWindow::buildScene()
 {
     QPen noPen(Qt::NoPen);
-    scene->addRect(250, 0,   100, 600, noPen, QBrush(QColor(80,80,80)));
-    scene->addRect(0,   250, 600, 100, noPen, QBrush(QColor(80,80,80)));
+    // Roads: 150 px wide each, intersection at (225,225)–(375,375).
+    scene->addRect(225, 0,   150, 600, noPen, QBrush(QColor(80,80,80)));
+    scene->addRect(0,   225, 600, 150, noPen, QBrush(QColor(80,80,80)));
 
     QPen dashPen(Qt::white, 1, Qt::DashLine);
-    scene->addLine(300, 0,   300, 250, dashPen);
-    scene->addLine(300, 350, 300, 600, dashPen);
-    scene->addLine(0,   300, 250, 300, dashPen);
-    scene->addLine(350, 300, 600, 300, dashPen);
+    // Median center line
+    scene->addLine(300, 0,   300, 225, dashPen);
+    scene->addLine(300, 375, 300, 600, dashPen);
+    scene->addLine(0,   300, 225, 300, dashPen);
+    scene->addLine(375, 300, 600, 300, dashPen);
+    // Lane dividers between outer and inner straight lanes in each half.
+    // Zones split at x=252 (S outer/inner) and x=348 (N inner/outer).
+    scene->addLine(252, 0,   252, 225, dashPen);
+    scene->addLine(252, 375, 252, 600, dashPen);
+    scene->addLine(348, 0,   348, 225, dashPen);
+    scene->addLine(348, 375, 348, 600, dashPen);
+    // Horizontal road: divider at y=252 (W outer/inner) and y=348 (E inner/outer).
+    scene->addLine(0,   252, 225, 252, dashPen);
+    scene->addLine(375, 252, 600, 252, dashPen);
+    scene->addLine(0,   348, 225, 348, dashPen);
+    scene->addLine(375, 348, 600, 348, dashPen);
 
     QPen stopPen(Qt::white, 3);
-    scene->addLine(300, STOP_N, 350, STOP_N, stopPen);
-    scene->addLine(250, STOP_S, 300, STOP_S, stopPen);
-    scene->addLine(STOP_E, 250, STOP_E, 300, stopPen);
-    scene->addLine(STOP_W, 300, STOP_W, 350, stopPen);
+    scene->addLine(300, STOP_N, 375, STOP_N, stopPen);   // N stop line (east half)
+    scene->addLine(225, STOP_S, 300, STOP_S, stopPen);   // S stop line (west half)
+    scene->addLine(STOP_E, 300, STOP_E, 375, stopPen);   // E stop line (south half)
+    scene->addLine(STOP_W, 225, STOP_W, 300, stopPen);   // W stop line (north half)
 
-    // Lights on far side of intersection (standard real-world placement —
-    // drivers see the light across the intersection).
-    lightIndicators[0] = new DirectionalLight(0, QPointF(352, 226));   // North: top-right
-    lightIndicators[1] = new DirectionalLight(1, QPointF(226, 226));   // East:  top-left
-    lightIndicators[2] = new DirectionalLight(2, QPointF(226, 352));   // South: bottom-left
-    lightIndicators[3] = new DirectionalLight(3, QPointF(352, 352));   // West:  bottom-right
+    // Left-turn lane markings — yellow dashed line between turn lane and
+    // inner straight lane, on the approach side only.
+    // Turn lane at 303 (N/E) or 281 (S/W); inner straight at 322 (N/E) or
+    // 262 (S/W); boundary sits at 320 / 280.
+    QPen turnLanePen(QColor(255, 200, 0), 1.5, Qt::DashLine);
+    scene->addLine(320, 385, 320, 590, turnLanePen);   // N approach
+    scene->addLine(280, 10,  280, 215, turnLanePen);   // S approach
+    scene->addLine(10,  320, 215, 320, turnLanePen);   // E approach
+    scene->addLine(385, 280, 590, 280, turnLanePen);   // W approach
+
+    // Left-turn arrows on the road (positioned on the approach side of each
+    // turn lane, a ways back from the stop line).
+    QFont arrowFont("Helvetica", 18, QFont::Bold);
+    auto addArrow = [&](qreal x, qreal y, const QString& s) {
+        QGraphicsTextItem* a = scene->addText(s, arrowFont);
+        a->setDefaultTextColor(QColor(255, 220, 0));
+        a->setPos(x, y);
+    };
+    addArrow(TURN_N - 5, 430, "↰");      // N
+    addArrow(TURN_S - 5, 150, "↲");      // S
+    addArrow(130, TURN_E - 14, "↱");     // E
+    addArrow(450, TURN_W - 14, "↵");     // W
+
+    // Straight-through lights — at the far corners, just outside the
+    // intersection, where drivers see them across the box.
+    lightIndicators[0] = new DirectionalLight(0, QPointF(377, 201));   // N: NE corner
+    lightIndicators[1] = new DirectionalLight(1, QPointF(377, 377));   // E: SE corner
+    lightIndicators[2] = new DirectionalLight(2, QPointF(201, 377));   // S: SW corner
+    lightIndicators[3] = new DirectionalLight(3, QPointF(201, 201));   // W: NW corner
     for (int i = 0; i < 4; i++) scene->addItem(lightIndicators[i]);
+
+    // Left-turn lights — on the inner side, just beside each turn lane.
+    turnLightIndicators[0] = new DirectionalLight(0, QPointF(295, 201));  // N
+    turnLightIndicators[1] = new DirectionalLight(1, QPointF(377, 295));  // E
+    turnLightIndicators[2] = new DirectionalLight(2, QPointF(283, 377));  // S
+    turnLightIndicators[3] = new DirectionalLight(3, QPointF(201, 283));  // W
+    for (int i = 0; i < 4; i++) scene->addItem(turnLightIndicators[i]);
 
     if (!m_manualMode) buildSimulationCars();
 
-    // HUD (both modes — shows emergency status and controls)
-    QGraphicsRectItem* hudBg = scene->addRect(2, 2, 250, m_manualMode ? 56 : 42,
-                                              QPen(Qt::NoPen), QBrush(QColor(0,0,0,160)));
+    // HUD (both modes — shows legend, spawn modes, and controls)
+    QGraphicsRectItem* hudBg = scene->addRect(2, 2, 320, m_manualMode ? 90 : 76,
+                                              QPen(Qt::NoPen), QBrush(QColor(0,0,0,180)));
     hudBg->setZValue(29);
 
     m_hud = scene->addText("");
@@ -128,18 +196,19 @@ void IntersectionWindow::processSpawnSchedule()
 
     // ═══════════════════════════════════════════════════════════════════
     // ACT 3: Traffic builds up — queuing visible on all directions
+    //         (left-turners sprinkled in to show the turn lane + blinker)
     // ═══════════════════════════════════════════════════════════════════
     if (m_tickCount == 300) {
         spawnCar(0, false);
-        spawnCar(0, false);
+        spawnCar(0, false, true);   // ↰ N left-turner
         spawnCar(2, false);
-        spawnCar(2, false);
+        spawnCar(2, false, true);   // ↰ S left-turner
     }
     if (m_tickCount == 340) {
         spawnCar(1, false);
-        spawnCar(1, false);
+        spawnCar(1, false, true);   // ↰ E left-turner
         spawnCar(3, false);
-        spawnCar(3, false);
+        spawnCar(3, false, true);   // ↰ W left-turner
     }
     if (m_tickCount == 400) {
         spawnCar(0, false);
@@ -225,26 +294,32 @@ void IntersectionWindow::processSpawnSchedule()
     }
 }
 
-// ── Emergency center lane positions ──────────────────────────────────────
-// Center of the two lanes per direction — where the emergency car spawns
-static const qreal EMG_CENTER_N = 327;  // between LANE_N[0]=320 and LANE_N[1]=335
-static const qreal EMG_CENTER_S = 267;  // between LANE_S[0]=260 and LANE_S[1]=275
-static const qreal EMG_CENTER_E = 267;  // between LANE_E[0]=260 and LANE_E[1]=275
-static const qreal EMG_CENTER_W = 327;  // between LANE_W[0]=320 and LANE_W[1]=335
+// ── Emergency corridor + yield positions ────────────────────────────────
+// Normally cars sit at the LANE_* centers. When an emergency arrives,
+// startLaneSplit() shifts them to these YIELD_* edge positions to carve
+// out a center corridor the emergency drives through.
+//   N/E yielded: inner → 320 (hugs turn-lane edge), outer → 359 (hugs curb).
+//                Corridor: 336..359 = 23 px wide. Emergency at 340.
+//   S/W yielded: outer → 225 (hugs curb), inner → 264 (hugs turn-lane edge).
+//                Corridor: 241..264 = 23 px wide. Emergency at 244.
+static const qreal EMG_CENTER_N = 340;
+static const qreal EMG_CENTER_S = 244;
+static const qreal EMG_CENTER_E = 340;
+static const qreal EMG_CENTER_W = 244;
 
-// Yield positions — where lane 0 / lane 1 cars shift to when making way
-static const qreal YIELD_N[2] = { 305, 347 };  // lane0 left, lane1 right
-static const qreal YIELD_S[2] = { 250, 290 };
-static const qreal YIELD_E[2] = { 250, 290 };
-static const qreal YIELD_W[2] = { 305, 347 };
+static const qreal YIELD_N[2] = { 320, 359 };   // [inner, outer]
+static const qreal YIELD_E[2] = { 320, 359 };
+static const qreal YIELD_S[2] = { 225, 264 };   // [outer, inner]
+static const qreal YIELD_W[2] = { 225, 264 };
 
 // ── Core spawn logic ──────────────────────────────────────────────────────
-void IntersectionWindow::spawnCarAt(int dir, qreal spawnX, qreal spawnY, bool emergency)
+void IntersectionWindow::spawnCarAt(int dir, qreal spawnX, qreal spawnY, bool emergency, bool turnLeft)
 {
     // Assign to the lane with fewer cars (fills lanes side by side)
+    // Left-turners don't count toward the straight-lane totals.
     int count0 = 0, count1 = 0;
     for (CarItem* c : cars) {
-        if (c->direction == dir && !c->data->isEmergency) {
+        if (c->direction == dir && !c->data->isEmergency && !c->data->willTurnLeft) {
             if (c->laneIndex == 0) count0++;
             else                   count1++;
         }
@@ -259,10 +334,13 @@ void IntersectionWindow::spawnCarAt(int dir, qreal spawnX, qreal spawnY, bool em
     default:stop=STOP_W; clear=CLEAR_W; break;
     }
 
-    // Set lateral position based on lane choice
+    // Set lateral position based on car type
+    bool vertical = (dir == 0 || dir == 2);
+    qreal finalLateral;   // where the car will end up (drives at this lateral)
+    qreal spawnLateral;   // where it first appears (may merge from normal lane to turn lane)
+
     if (emergency) {
         // Emergency cars spawn at the center of the two lanes
-        bool vertical = (dir == 0 || dir == 2);
         qreal center;
         switch (dir) {
         case 0: center = EMG_CENTER_N; break;
@@ -270,41 +348,73 @@ void IntersectionWindow::spawnCarAt(int dir, qreal spawnX, qreal spawnY, bool em
         case 2: center = EMG_CENTER_S; break;
         default:center = EMG_CENTER_W; break;
         }
-        if (vertical) spawnX = center;
-        else          spawnY = center;
+        finalLateral = center;
+        spawnLateral = center;
+    } else if (turnLeft) {
+        // Left-turners: spawn in a normal lane (inner, lane 0) then merge to turn lane
+        qreal normalLateral, turnLateral;
+        switch (dir) {
+        case 0: normalLateral = LANE_N[0]; turnLateral = TURN_N; break;
+        case 1: normalLateral = LANE_E[0]; turnLateral = TURN_E; break;
+        case 2: normalLateral = LANE_S[1]; turnLateral = TURN_S; break;   // inner S lane is [1]
+        default:normalLateral = LANE_W[1]; turnLateral = TURN_W; break;   // inner W lane is [1]
+        }
+        spawnLateral = normalLateral;
+        finalLateral = turnLateral;    // merges to this over time via animateLateral
     } else {
         // Normal cars: set lateral position to match chosen lane
-        bool vertical = (dir == 0 || dir == 2);
-        if (vertical) {
-            switch (dir) {
-            case 0: spawnX = LANE_N[lane]; break;
-            case 2: spawnX = LANE_S[lane]; break;
-            }
-        } else {
-            switch (dir) {
-            case 1: spawnY = LANE_E[lane]; break;
-            case 3: spawnY = LANE_W[lane]; break;
-            }
+        qreal laneLateral;
+        switch (dir) {
+        case 0: laneLateral = LANE_N[lane]; break;
+        case 1: laneLateral = LANE_E[lane]; break;
+        case 2: laneLateral = LANE_S[lane]; break;
+        default:laneLateral = LANE_W[lane]; break;
+        }
+        spawnLateral = laneLateral;
+        finalLateral = laneLateral;
+    }
+
+    if (vertical) spawnX = spawnLateral;
+    else          spawnY = spawnLateral;
+
+    // ── Anti-overlap: if a previously-spawned car is still near the scene
+    //    entry in the SAME direction and SAME lateral position, push this
+    //    spawn farther back so they don't stack on top of each other.
+    //    Happens most visibly in manual mode when direction keys are mashed.
+    static const qreal SPAWN_GAP = 1.5;    // tighter follow-distance at spawn
+    static const qreal CAR_LEN   = 28.0;   // matches CAR_H in CarItem.cpp
+    qreal ourLateral = vertical ? spawnX : spawnY;
+    for (CarItem* c : cars) {
+        if (c->direction != dir) continue;
+        qreal cLat = vertical ? c->x() : c->y();
+        if (qAbs(cLat - ourLateral) > 10.0) continue;    // different lane
+        switch (dir) {
+        case 0: spawnY = qMax(spawnY, c->y() + CAR_LEN + SPAWN_GAP); break;
+        case 1: spawnX = qMin(spawnX, c->x() - CAR_LEN - SPAWN_GAP); break;
+        case 2: spawnY = qMin(spawnY, c->y() - CAR_LEN - SPAWN_GAP); break;
+        case 3: spawnX = qMax(spawnX, c->x() + CAR_LEN + SPAWN_GAP); break;
         }
     }
 
-    QString id = (emergency ? "EMG" : "Car") + QString::number(m_carCounter++);
-    Node*    n   = new Node(id, emergency);
+    QString prefix = emergency ? "EMG" : (turnLeft ? "L" : "Car");
+    QString id = prefix + QString::number(m_carCounter++);
+    Node*    n   = new Node(id, emergency, turnLeft);
     CarItem* car = new CarItem(n, dir, lane);
     car->setPos(spawnX, spawnY);
     car->stopCoord     = stop;
     car->effectiveStop = stop;
     car->clearCoord    = clear;
 
-    // Set lateral tracking (x for N/S, y for E/W)
-    bool vertical = (dir == 0 || dir == 2);
-    qreal lateral = vertical ? spawnX : spawnY;
-    car->lateralTarget  = lateral;
-    car->originalLateral = lateral;
+    // Lateral tracking — straight cars stay at lane lateral; turn cars merge to turn lateral
+    car->lateralTarget   = finalLateral;
+    car->originalLateral = finalLateral;
 
     scene->addItem(car);
     cars.append(car);
-    controller.addCar(dir, n);
+
+    // Left-turners are NOT queued in the controller's straight-lanes.
+    // Their release is handled directly in updateSimulation based on the turn light.
+    if (!turnLeft) controller.addCar(dir, n);
 
     // If emergency, immediately start lane splitting
     if (emergency) {
@@ -312,13 +422,13 @@ void IntersectionWindow::spawnCarAt(int dir, qreal spawnX, qreal spawnY, bool em
     }
 
     QString dirs[4] = {"North","East","South","West"};
-    qDebug() << (emergency ? "🚨" : "🚗") << id << "from" << dirs[dir];
+    qDebug() << (emergency ? "🚨" : (turnLeft ? "↰" : "🚗")) << id << "from" << dirs[dir];
 }
 
 // ── Spawn one car in a direction (lane chosen by spawnCarAt) ─────────────
-void IntersectionWindow::spawnCar(int dir, bool emergency)
+void IntersectionWindow::spawnCar(int dir, bool emergency, bool turnLeft)
 {
-    // Pass a placeholder lateral — spawnCarAt will override based on lane choice
+    // Pass a placeholder lateral — spawnCarAt will override based on car type
     qreal spawnX, spawnY;
     switch (dir) {
     case 0: spawnX=LANE_N[0]; spawnY=580; break;   // lateral overridden
@@ -326,9 +436,17 @@ void IntersectionWindow::spawnCar(int dir, bool emergency)
     case 2: spawnX=LANE_S[0]; spawnY=10;  break;
     default:spawnX=580;       spawnY=LANE_W[0]; break;
     }
-    spawnCarAt(dir, spawnX, spawnY, emergency);
+    spawnCarAt(dir, spawnX, spawnY, emergency, turnLeft);
     m_nextIsEmergency = false;
     updateHud();
+}
+
+// Turn light for direction `dir` is controlled by the dedicated protected
+// left-turn phase in TrafficController. Turn-phase duration scales with the
+// queue of waiting left-turn cars (pushed to controller each tick below).
+bool IntersectionWindow::isTurnLightGreen(int dir) const
+{
+    return controller.getTurnLightState(dir) == GREEN;
 }
 
 // ── HUD ───────────────────────────────────────────────────────────────────
@@ -337,18 +455,27 @@ void IntersectionWindow::updateHud()
     if (!m_hud) return;
 
     QString emergencyLine = m_nextIsEmergency
-                                ? "<font color='#ff4444'>🚨 V pressed — next spawn is EMERGENCY</font><br>"
+                                ? "<font color='#ff4444'>🚨 next spawn = EMERGENCY</font><br>"
                                 : "";
+    QString turnLine = m_nextIsTurnLeft
+                           ? "<font color='#ffcc00'>↰ next spawn = LEFT TURN</font><br>"
+                           : "";
 
     QString controls = m_manualMode
-                           ? "<font color='#aaaaaa'>N/E/S/W = car &nbsp;|&nbsp; V then N/E/S/W = emergency &nbsp;|&nbsp; R = restart</font>"
-                           : "<font color='#aaaaaa'>V then N/E/S/W = inject emergency &nbsp;|&nbsp; R = restart</font>";
+                           ? "<font color='#aaaaaa'>N/E/S/W = car &nbsp;|&nbsp; V = arm emergency &nbsp;|&nbsp; L = arm left-turn &nbsp;|&nbsp; R = restart</font>"
+                           : "<font color='#aaaaaa'>V or L then N/E/S/W = inject &nbsp;|&nbsp; R = restart</font>";
+
+    QString legend =
+        "<font color='#8fd9ff'>■</font> car &nbsp;"
+        "<font color='#ff6060'>■</font> emergency &nbsp;"
+        "<font color='#1e90ff'>■</font> left-turner "
+        "<font color='#ffcc00'>(blinker)</font><br>";
 
     QString carCount = m_manualMode
                            ? "<font color='#cccccc'>Cars on road: " + QString::number(cars.size()) + "</font><br>"
                            : "";
 
-    m_hud->setHtml(carCount + emergencyLine + controls);
+    m_hud->setHtml(carCount + legend + emergencyLine + turnLine + controls);
 }
 
 // ── Clear ─────────────────────────────────────────────────────────────────
@@ -359,6 +486,7 @@ void IntersectionWindow::clearScene()
     scene->clear();
     controller        = TrafficController();
     m_nextIsEmergency = false;
+    m_nextIsTurnLeft  = false;
     m_emergencyWaiting = false;
     m_splittingDir    = -1;
     m_splitComplete   = false;
@@ -390,23 +518,41 @@ void IntersectionWindow::keyPressEvent(QKeyEvent* event)
     // Works in BOTH manual and simulation mode.
     case Qt::Key_V:
         m_nextIsEmergency = !m_nextIsEmergency;
+        if (m_nextIsEmergency) m_nextIsTurnLeft = false;
         updateHud();
         qDebug() << (m_nextIsEmergency ? "🚨 Emergency armed — press N/E/S/W"
                                        : "🚨 Emergency disarmed");
         break;
 
-    // Direction keys — spawn car (manual) or emergency (if V was pressed)
+    // L arms left-turn mode — next direction key spawns a left-turning car.
+    case Qt::Key_L:
+        m_nextIsTurnLeft = !m_nextIsTurnLeft;
+        if (m_nextIsTurnLeft) m_nextIsEmergency = false;
+        updateHud();
+        qDebug() << (m_nextIsTurnLeft ? "↰ Left-turn armed — press N/E/S/W"
+                                      : "↰ Left-turn disarmed");
+        break;
+
+    // Direction keys — spawn car (manual), emergency (V), or left-turner (L)
     case Qt::Key_N:
-        if (m_manualMode || m_nextIsEmergency) spawnCar(0, m_nextIsEmergency);
+        if (m_manualMode || m_nextIsEmergency || m_nextIsTurnLeft)
+            spawnCar(0, m_nextIsEmergency, m_nextIsTurnLeft);
+        m_nextIsTurnLeft = false;
         break;
     case Qt::Key_E:
-        if (m_manualMode || m_nextIsEmergency) spawnCar(1, m_nextIsEmergency);
+        if (m_manualMode || m_nextIsEmergency || m_nextIsTurnLeft)
+            spawnCar(1, m_nextIsEmergency, m_nextIsTurnLeft);
+        m_nextIsTurnLeft = false;
         break;
     case Qt::Key_S:
-        if (m_manualMode || m_nextIsEmergency) spawnCar(2, m_nextIsEmergency);
+        if (m_manualMode || m_nextIsEmergency || m_nextIsTurnLeft)
+            spawnCar(2, m_nextIsEmergency, m_nextIsTurnLeft);
+        m_nextIsTurnLeft = false;
         break;
     case Qt::Key_W:
-        if (m_manualMode || m_nextIsEmergency) spawnCar(3, m_nextIsEmergency);
+        if (m_manualMode || m_nextIsEmergency || m_nextIsTurnLeft)
+            spawnCar(3, m_nextIsEmergency, m_nextIsTurnLeft);
+        m_nextIsTurnLeft = false;
         break;
 
     default:
@@ -426,12 +572,30 @@ void IntersectionWindow::updateLightVisuals()
         else
             lightIndicators[i]->setColor(Qt::red);
     }
+
+    // Turn light reflects the controller's dedicated protected-turn phase state.
+    // (Green only during the N+S turn or E+W turn phase — not while the
+    //  destination's straight light is green.)
+    for (int i = 0; i < 4; i++) {
+        LightState st = controller.getTurnLightState(i);
+        if (st == GREEN)
+            turnLightIndicators[i]->setColor(Qt::green);
+        else if (st == YELLOW)
+            turnLightIndicators[i]->setColor(Qt::yellow);
+        else
+            turnLightIndicators[i]->setColor(Qt::red);
+    }
 }
 
 // ── Lane splitting for emergency vehicles ────────────────────────────────
+// Under normal conditions cars drive centered in their lane. When an
+// emergency arrives, shift every non-released same-direction car outward
+// (toward median or curb depending on which lane they're in) so a corridor
+// opens up in the middle for the emergency to drive through. Restore them
+// once the emergency has cleared the scene.
 void IntersectionWindow::startLaneSplit(int dir)
 {
-    m_splittingDir = dir;
+    m_splittingDir  = dir;
     m_splitComplete = false;
 
     const qreal* yieldPos;
@@ -444,10 +608,11 @@ void IntersectionWindow::startLaneSplit(int dir)
 
     for (CarItem* car : cars) {
         if (car->direction != dir) continue;
-        if (car->data->isEmergency) continue;  // don't shift the emergency car itself
-        if (car->inIntersection) continue;       // already through
+        if (car->data->isEmergency) continue;   // don't shift the emergency itself
+        if (car->inIntersection)    continue;   // already through
+        if (car->data->willTurnLeft) continue;  // turners use the turn lane — unaffected
 
-        car->yielding = true;
+        car->yielding      = true;
         car->lateralTarget = yieldPos[car->laneIndex];
     }
 
@@ -459,12 +624,11 @@ void IntersectionWindow::endLaneSplit(int dir)
     for (CarItem* car : cars) {
         if (car->direction != dir) continue;
         if (!car->yielding) continue;
-
-        car->yielding = false;
+        car->yielding      = false;
         car->lateralTarget = car->originalLateral;
     }
 
-    m_splittingDir = -1;
+    m_splittingDir  = -1;
     m_splitComplete = false;
     qDebug() << "🚨 Lane split ended for direction" << dir;
 }
@@ -496,16 +660,21 @@ void IntersectionWindow::computeEffectiveStops()
     static const qreal GAP = 4.0;
     static const qreal CAR_LEN = 28.0; // matches CAR_H in CarItem.cpp
 
-    // Group non-released, non-inIntersection, NON-EMERGENCY cars by direction.
-    // Emergency cars are in the center lane — they don't queue behind normal cars.
-    QList<CarItem*> byDir[4];
+    // Group non-released, non-inIntersection cars by (direction, isTurnLane).
+    // Emergency cars bypass queueing entirely (they drive through the center).
+    // Turn-lane cars queue separately from straight-through cars (different lane).
+    // Indices: d*2 + 0 = straight cars for dir d; d*2 + 1 = turn cars for dir d
+    QList<CarItem*> byGroup[8];
     for (CarItem* car : cars) {
-        if (!car->released && !car->inIntersection && !car->data->isEmergency)
-            byDir[car->direction].append(car);
+        if (car->released || car->inIntersection) continue;
+        if (car->data->isEmergency) continue;
+        int g = car->direction * 2 + (car->data->willTurnLeft ? 1 : 0);
+        byGroup[g].append(car);
     }
 
-    for (int d = 0; d < 4; d++) {
-        QList<CarItem*>& list = byDir[d];
+    for (int g = 0; g < 8; g++) {
+        int d = g / 2;
+        QList<CarItem*>& list = byGroup[g];
         if (list.isEmpty()) continue;
 
         // Sort by distance to stop line (closest first)
@@ -582,8 +751,30 @@ void IntersectionWindow::updateSimulation()
         m_tickCount++;
     }
 
-    // ── Animate lateral shifts every tick (lane splitting) ───────────
+    // ── Update congestion statistics in traffic controller ───────────
+    controller.updateCongestionStats();
+
+    // ── Tell controller how many left-turners are waiting per direction.
+    //    Controller uses this to:
+    //      (a) decide whether to even run a protected turn phase
+    //          (nextPhase skips empty phases), and
+    //      (b) scale that phase's duration with the queue size
+    //          (more turners → longer green).
+    int turnCounts[4] = { 0, 0, 0, 0 };
+    for (CarItem* car : cars) {
+        if (!car->data->willTurnLeft) continue;
+        if (car->released || car->inIntersection || car->turnCompleted) continue;
+        if (car->direction < 0 || car->direction >= 4) continue;
+        turnCounts[car->direction]++;
+    }
+    for (int d = 0; d < 4; d++)
+        controller.setTurnQueueSize(d, turnCounts[d]);
+
+    // ── Animate lateral shifts every tick (lane splitting + turn merge) ──
     animateAllLateral();
+
+    // ── Flash blinkers on left-turn cars ──────────────────────────────
+    for (CarItem* car : cars) car->updateBlinker();
 
     // ── Compute effective stop positions (anti-stacking) ─────────────
     computeEffectiveStops();
@@ -665,11 +856,26 @@ void IntersectionWindow::updateSimulation()
     // ── Normal flow ───────────────────────────────────────────────────
     controller.advanceLights();
 
-    // Only release cars if light is GREEN (not YELLOW or RED)
+    // Release straight cars when their own light is green
     for (CarItem* car : cars) {
+        if (car->data->willTurnLeft) continue;  // turn cars handled separately below
         if (!car->released && car->atStopLine) {
             Node* ok = controller.tryRelease(car->direction);
             if (ok) { car->released = true; car->atStopLine = false; }
+        }
+    }
+
+    // Release left-turn cars when their destination direction's light is green.
+    // Turn cars are not in controller queues — handled directly here.
+    for (CarItem* car : cars) {
+        if (!car->data->willTurnLeft) continue;
+        if (car->released || !car->atStopLine) continue;
+        if (isTurnLightGreen(car->direction)) {
+            car->released   = true;
+            car->atStopLine = false;
+            qDebug() << "↰ Turn released:" << car->data->vehicleID
+                     << "from dir" << car->direction
+                     << "→ merging into dir" << ((car->direction + 3) % 4);
         }
     }
 
