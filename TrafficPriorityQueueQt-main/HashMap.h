@@ -1,0 +1,83 @@
+#ifndef HASHMAP_H
+#define HASHMAP_H
+
+struct HashNode {
+    int key;
+    int value;
+    HashNode* next;
+
+    HashNode(int k, int v) : key(k), value(v), next(nullptr) {}
+};
+
+class HashMap {
+private:
+    //there is 4 lanes so created a table size of 8
+    static const int TABLE_SIZE = 8;
+
+    HashNode* table[TABLE_SIZE];
+
+    // Basic hash function
+    int hashFunction(int key) const {
+        return key % TABLE_SIZE;
+    }
+
+public:
+
+    HashMap() {
+        for (int i = 0; i < TABLE_SIZE; i++) {
+            table[i] = nullptr;
+        }
+    }
+    ~HashMap() {
+        for (int i = 0; i < TABLE_SIZE; i++) {
+            HashNode* entry = table[i];
+            while (entry != nullptr) {
+                HashNode* prev = entry;
+                entry = entry->next;
+                delete prev;
+            }
+            table[i] = nullptr;
+        }
+    }
+
+    // Insert or update a value
+
+    void put(int key, int value) {
+        int hashVal = hashFunction(key);
+        HashNode* entry = table[hashVal];
+
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                entry->value = value; // Update existing
+                return;
+            }
+            entry = entry->next;
+        }
+
+        // Key not found, insert at the front of the linked list
+        HashNode* newNode = new HashNode(key, value);
+        newNode->next = table[hashVal];
+        table[hashVal] = newNode;
+    }
+
+    // Retrieve a value
+    int get(int key) const {
+        int hashVal = hashFunction(key);
+        HashNode* entry = table[hashVal];
+
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                return entry->value;
+            }
+            entry = entry->next;
+        }
+        return 0;
+    }
+
+    // to increment statistics
+    void increment(int key) {
+        put(key, get(key) + 1);
+    }
+};
+
+#endif
