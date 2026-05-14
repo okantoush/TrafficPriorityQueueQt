@@ -1,0 +1,6 @@
+hospital_id,hospital_name,city,graph_node_id,er_beds,icu_beds,incubators,ventilators,wait_minutes,capabilities_note
+1001,Kasr Al Ainy Emergency Hospital,Cairo,generated_at_runtime,6,3,1,4,18,"CT MRI OT TRAUMA BURN CATH NEUROLOGIST SURGEON"
+1002,Ain Shams University Hospital,Cairo,generated_at_runtime,2,2,0,2,35,"CT OT TRAUMA CATH SURGEON"
+1003,Sheikh Zayed Specialized Hospital,Giza,generated_at_runtime,4,1,2,3,12,"CT MRI CATH NEUROLOGIST"
+1004,Alexandria Main University Hospital,Alexandria,generated_at_runtime,5,2,1,2,22,"CT MRI OT TRAUMA SURGEON"
+1005,Mansoura Emergency Hospital,Mansoura,generated_at_runtime,3,2,1,3,16,"CT OT TRAUMA BURN SURGEON"
